@@ -9,12 +9,13 @@ import (
 )
 
 // TODO: switch from single slot to multiple slots
-type StateRent interface {
-	AddCost(uint64) []ids.ID
-	Add(item ids.ID, initialBalance uint64)
-	Remove(item ids.ID) (uint64, error)
-	IncreaseBalance(item ids.ID, amount uint64)
-}
+// type StateRent interface {
+// 	AddCost(uint64) []ids.ID
+// 	Add(items []ids.ID, initialBalance uint64)
+// 	Remove(items []ids.ID) (uint64, error)
+// 	IncreaseBalance(items []ids.ID, amount uint64)
+// 	GetBalance(item ids.ID) uint64
+// }
 
 type stateRent struct {
 	totalCost uint64
@@ -73,4 +74,12 @@ func (s *stateRent) IncreaseBalance(item ids.ID, amount uint64) {
 	s.items.Remove(entry.Index)
 	entry.Val += amount
 	s.items.Push(entry)
+}
+
+func (s *stateRent) GetBalance(item ids.ID) uint64 {
+	entry, ok := s.items.Get(item)
+	if !ok {
+		return 0
+	}
+	return entry.Val - s.totalCost
 }
