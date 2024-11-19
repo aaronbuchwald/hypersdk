@@ -24,6 +24,11 @@ import (
 	"github.com/holiman/uint256"
 )
 
+const (
+	fromAddressStr      = "TtF4d2QWbk5vzQGTEPrN48x6vwgAoAmKQ9cbp79inpQmcRKES"
+	recipientAddressStr = "2mcwQKiD8VEspmMJpL1dc7okQQ5dDVAWeCBZ7FWBFAbxpv3t7w"
+)
+
 type TestContext struct {
 	Context         context.Context
 	From            codec.Address
@@ -41,10 +46,9 @@ type TestContext struct {
 }
 
 func NewTestContext() *TestContext {
-
 	ctx := context.Background()
 
-	from := codec.CreateAddress(uint8(1), ids.GenerateTestID())
+	from := codec.CreateAddress(uint8(1), ids.FromStringOrPanic(fromAddressStr))
 
 	tracer, err := trace.New(trace.Config{Enabled: false})
 	if err != nil {
@@ -71,7 +75,7 @@ func NewTestContext() *TestContext {
 		panic(err)
 	}
 
-	recipient := codec.CreateAddress(uint8(2), ids.GenerateTestID())
+	recipient := codec.CreateAddress(uint8(2), ids.FromStringOrPanic(recipientAddressStr))
 	err = InitAccount(ctx, mu, recipient, 0)
 	if err != nil {
 		panic(err)

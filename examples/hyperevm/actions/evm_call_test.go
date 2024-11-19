@@ -582,3 +582,41 @@ func TestEVMTstate(t *testing.T) {
 	tstateTest.Run(testCtx.Context, t)
 	require.NoError(testCtx.State.Commit(testCtx.Context))
 }
+
+func BenchmarkEVMTransfer(b *testing.B) {
+	require := require.New(b)
+
+	testCtx := NewTestContext()
+	to := storage.ConvertAddress(testCtx.Recipient)
+	directTransfer := &chaintest.ActionBenchmark{
+		Name: "direct EOA to EOA transfer",
+		Action: &EvmCall{
+			To:       &to,
+			Value:    1,
+			GasLimit: testCtx.SufficientGas,
+		},
+		Rules: testCtx.Rules,
+		CreateState: func() state.Mutable {
+			testCtx := NewTestContext()
+			return testCtx.State
+		},
+		Timestamp: testCtx.Timestamp,
+		Actor:     testCtx.From,
+		ActionID:  testCtx.ActionID,
+		ExpectedOutput: &EvmCallResult{
+			Success:   true,
+			UsedGas:   0x5208,
+			Return:    nil,
+			ErrorCode: NilError,
+		},
+		Assertion: func(ctx context.Context, b *testing.B, mu state.Mutable) {
+			recipientAccount, err := storage.GetAccount(ctx, mu, to)
+			require.NoError(err)
+			decodedAccount, err := storage.DecodeAccount(recipientAccount)
+			require.NoError(err)
+			require.Equal(uint256.NewInt(1), decodedAccount.Balance)
+		},
+	}
+	directTransfer.Run(testCtx.Context, b)
+	require.NoError(testCtx.State.Commit(testCtx.Context))
+}
