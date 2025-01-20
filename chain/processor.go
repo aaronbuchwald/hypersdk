@@ -256,7 +256,7 @@ func (p *Processor) Execute(
 	p.metrics.stateChanges.Add(float64(ts.PendingChanges()))
 	p.metrics.stateOperations.Add(float64(ts.OpIndex()))
 
-	view, err := createView(ctx, p.tracer, parentView, ts.ChangedKeys())
+	view, err := CreateViewFromDiff(ctx, p.tracer, parentView, ts.ChangedKeys())
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +427,7 @@ func (p *Processor) AsyncVerify(ctx context.Context, block *ExecutionBlock) erro
 	return nil
 }
 
-func createView(ctx context.Context, tracer trace.Tracer, parentView state.View, stateDiff map[string]maybe.Maybe[[]byte]) (merkledb.View, error) {
+func CreateViewFromDiff(ctx context.Context, tracer trace.Tracer, parentView state.View, stateDiff map[string]maybe.Maybe[[]byte]) (merkledb.View, error) {
 	ctx, span := tracer.Start(
 		ctx, "Chain.CreateView",
 		oteltrace.WithAttributes(

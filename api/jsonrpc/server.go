@@ -121,9 +121,9 @@ func (j *JSONRPCServer) LastAccepted(req *http.Request, _ *struct{}, reply *Last
 	if err != nil {
 		return err
 	}
-	reply.Height = blk.Hght
-	reply.BlockID = blk.GetID()
-	reply.Timestamp = blk.Tmstmp
+	reply.Height = blk.Block.GetHeight()
+	reply.BlockID = blk.Block.GetID()
+	reply.Timestamp = blk.Block.GetTimestamp()
 	return nil
 }
 

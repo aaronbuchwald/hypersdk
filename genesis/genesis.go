@@ -5,6 +5,7 @@ package genesis
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 
@@ -14,6 +15,8 @@ import (
 
 	"github.com/ava-labs/hypersdk/chain"
 	"github.com/ava-labs/hypersdk/codec"
+	"github.com/ava-labs/hypersdk/fees"
+	internalfees "github.com/ava-labs/hypersdk/internal/fees"
 	"github.com/ava-labs/hypersdk/state"
 
 	safemath "github.com/ava-labs/avalanchego/utils/math"
@@ -29,7 +32,7 @@ type GenesisAndRuleFactory interface {
 }
 
 type Genesis interface {
-	InitializeState(ctx context.Context, tracer trace.Tracer, mu state.Mutable, balanceHandler chain.BalanceHandler) error
+	InitializeState(ctx context.Context, tracer trace.Tracer, mu state.Mutable, balanceHandler chain.BalanceHandler, metadataManager chain.MetadataManager) error
 	GetStateBranchFactor() merkledb.BranchFactor
 }
 
@@ -52,7 +55,13 @@ func NewDefaultGenesis(customAllocations []*CustomAllocation) *DefaultGenesis {
 	}
 }
 
-func (g *DefaultGenesis) InitializeState(ctx context.Context, tracer trace.Tracer, mu state.Mutable, balanceHandler chain.BalanceHandler) error {
+func (g *DefaultGenesis) InitializeState(
+	ctx context.Context,
+	tracer trace.Tracer,
+	mu state.Mutable,
+	balanceHandler chain.BalanceHandler,
+	metadataManager chain.MetadataManager,
+) error {
 	_, span := tracer.Start(ctx, "Genesis.InitializeState")
 	defer span.End()
 
@@ -69,6 +78,23 @@ func (g *DefaultGenesis) InitializeState(ctx context.Context, tracer trace.Trace
 			return fmt.Errorf("%w: addr=%s, bal=%d", err, alloc.Address, alloc.Balance)
 		}
 	}
+
+	// Update chain metadata
+	if err := mu.Insert(ctx, chain.HeightKey(metadataManager.HeightPrefix()), binary.BigEndian.AppendUint64(nil, 0)); err != nil {
+		return fmt.Errorf("failed to set genesis height: %w", err)
+	}
+	if err := mu.Insert(ctx, chain.TimestampKey(metadataManager.TimestampPrefix()), binary.BigEndian.AppendUint64(nil, 0)); err != nil {
+		return fmt.Errorf("failed to set genesis timestamp: %w", err)
+	}
+	feeManager := internalfees.NewManager(nil)
+	minUnitPrice := g.Rules.GetMinUnitPrice()
+	for i := fees.Dimension(0); i < fees.FeeDimensions; i++ {
+		feeManager.SetUnitPrice(i, minUnitPrice[i])
+	}
+	if err := mu.Insert(ctx, chain.FeeKey(metadataManager.FeePrefix()), feeManager.Bytes()); err != nil {
+		return fmt.Errorf("failed to set genesis fee manager: %w", err)
+	}
+
 	return nil
 }
 

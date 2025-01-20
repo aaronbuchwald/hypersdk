@@ -7,7 +7,6 @@ import (
 	"context"
 
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/trace"
 	"github.com/ava-labs/avalanchego/utils/logging"
 
@@ -19,6 +18,7 @@ import (
 )
 
 type VM interface {
+	// Input + Chain Definition
 	GetDataDir() string
 	GetGenesisBytes() []byte
 	Genesis() genesis.Genesis
@@ -31,16 +31,14 @@ type VM interface {
 	OutputCodec() *codec.TypeParser[codec.Typed]
 	AuthCodec() *codec.TypeParser[chain.Auth]
 	Rules(t int64) chain.Rules
+	BalanceHandler() chain.BalanceHandler
+	// R/W functionality
+	ReadState(ctx context.Context, keys [][]byte) ([][]byte, []error)
+	ImmutableState(ctx context.Context) (state.Immutable, error)
+	UnitPrices(context.Context) (fees.Dimensions, error)
+	LastAcceptedBlock(ctx context.Context) (*chain.ExecutedBlock, error)
 	Submit(
 		ctx context.Context,
 		txs []*chain.Transaction,
 	) (errs []error)
-	LastAcceptedBlock(ctx context.Context) (*chain.StatelessBlock, error)
-	UnitPrices(context.Context) (fees.Dimensions, error)
-	CurrentValidators(
-		context.Context,
-	) (map[ids.NodeID]*validators.GetValidatorOutput, map[string]struct{})
-	ReadState(ctx context.Context, keys [][]byte) ([][]byte, []error)
-	ImmutableState(ctx context.Context) (state.Immutable, error)
-	BalanceHandler() chain.BalanceHandler
 }

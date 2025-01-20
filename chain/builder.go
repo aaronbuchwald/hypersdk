@@ -439,7 +439,7 @@ func (c *Builder) BuildBlock(ctx context.Context, parentOutputBlock *OutputBlock
 	}
 
 	// Calculate new view from parent and state diff
-	view, err := createView(ctx, c.tracer, parentView, ts.ChangedKeys())
+	view, err := CreateViewFromDiff(ctx, c.tracer, parentView, ts.ChangedKeys())
 	if err != nil {
 		return nil, nil, err
 	}

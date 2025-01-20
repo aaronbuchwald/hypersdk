@@ -4,19 +4,64 @@
 package vm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/ava-labs/hypersdk/api"
 	"github.com/ava-labs/hypersdk/chain"
+	"github.com/ava-labs/hypersdk/chainindex"
 	"github.com/ava-labs/hypersdk/event"
+	"github.com/ava-labs/hypersdk/internal/builder"
+	"github.com/ava-labs/hypersdk/internal/gossiper"
+	"github.com/ava-labs/hypersdk/internal/mempool"
+	"github.com/ava-labs/hypersdk/snow"
+	"github.com/ava-labs/hypersdk/statesync"
 )
 
+type ComponentOptions[I snow.Block, O snow.Block, A snow.Block] struct {
+	// init is a function that provides a config and basic backend dependencies for registration
+}
+
 type Options struct {
-	builder                    bool
-	gossiper                   bool
+	mempoolF        func(vm *VM) *mempool.Mempool[*chain.Transaction]
+
+	// both depend on mempool
+	// mempool, builder, gossiper must be exported for testing
+	builderF        func(vm *VM) builder.Builder
+	gossiperF       func(vm *VM) (gossiper.Gossiper, error)
+	
+
+	syncers         func(vm *VM) ([]statesync.Syncer[*chain.ExecutionBlock], error)
+	loadLatestChain func(vm *VM) (*chainindex.ChainIndex[*chain.ExecutionBlock], *chain.OutputBlock, *chain.OutputBlock, error)
+	loadChain       func(vm *VM) (snow.ChainHandler[*chain.ExecutionBlock, *chain.OutputBlock, *chain.OutputBlock], error)
+
+
+	onNormalOp                 []func() error
+	onMempoolUpdated           []func(context.Context)
+	apiOptions                 []Option
 	blockSubscriptionFactories []event.SubscriptionFactory[*chain.ExecutedBlock]
 	vmAPIHandlerFactories      []api.HandlerFactory[api.VM]
+}
+
+// what do I need to change?
+// gossiper
+// syncers
+// loadLatestChain
+// loadChain
+
+// can I build a version of the current VM that is clean and assembled as a set of these components
+// via options and interfaces?
+// then I just need to implement the DSMR equivalent
+
+func NewOptions(ops ...Option) *Options {
+	return &Options{
+		syncers:    registerSyncers,
+		builderF:   timeBuilder,
+		gossiperF:  proposerGossiper,
+		mempoolF:   createMempool,
+		apiOptions: ops,
+	}
 }
 
 type optionFunc func(vm api.VM, configBytes []byte) (Opt, error)
@@ -51,31 +96,6 @@ func NewOption[T any](namespace string, defaultConfig T, optionFunc OptionFunc[T
 		return optionFunc(vm, config)
 	}
 	return newOptionWithBytes(namespace, configOptionFunc)
-}
-
-func WithBuilder() Opt {
-	return newFuncOption(func(o *Options) {
-		o.builder = true
-	})
-}
-
-func WithGossiper() Opt {
-	return newFuncOption(func(o *Options) {
-		o.gossiper = true
-	})
-}
-
-func WithManual() Option {
-	return NewOption[struct{}](
-		"manual",
-		struct{}{},
-		func(_ api.VM, _ struct{}) (Opt, error) {
-			return newFuncOption(func(o *Options) {
-				WithBuilder().apply(o)
-				WithGossiper().apply(o)
-			}), nil
-		},
-	)
 }
 
 func WithBlockSubscriptions(subscriptions ...event.SubscriptionFactory[*chain.ExecutedBlock]) Opt {

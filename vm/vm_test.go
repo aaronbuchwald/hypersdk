@@ -31,7 +31,6 @@ import (
 	"github.com/ava-labs/hypersdk/event"
 	"github.com/ava-labs/hypersdk/extension/externalsubscriber"
 	"github.com/ava-labs/hypersdk/genesis"
-	"github.com/ava-labs/hypersdk/internal/mempool"
 	"github.com/ava-labs/hypersdk/keys"
 	"github.com/ava-labs/hypersdk/state"
 	"github.com/ava-labs/hypersdk/state/balance"
@@ -400,10 +399,10 @@ func TestForceGossip(t *testing.T) {
 
 	vm0 := network.VMs[0].VM
 	r.NoError(vm0.SubmitTx(ctx, tx0))
-	r.NoError(vm0.Gossiper().Force(ctx))
+	r.NoError(vm0.Gossiper.Force(ctx))
 
 	vm1 := network.VMs[1].VM
-	mempool := vm1.Mempool().(*mempool.Mempool[*chain.Transaction])
+	mempool := vm1.Mempool
 	r.Equal(1, mempool.Len(ctx))
 	r.True(mempool.Has(ctx, tx0.GetID()))
 }
@@ -551,7 +550,7 @@ func TestIndexerAPI(t *testing.T) {
 	defer network.Shutdown(ctx)
 
 	client := indexer.NewClient(network.URIs()[0])
-	parser := network.VMs[0].VM
+	parser := network.VMs[0].VM.ChainDefinition
 	genesisBlock, err := client.GetLatestBlock(ctx, parser)
 	r.NoError(err)
 	lastAccepted, err := network.VMs[0].SnowVM.GetConsensusIndex().GetLastAccepted(ctx)
@@ -611,7 +610,7 @@ func TestWebsocketAPI(t *testing.T) {
 		r.NoError(blk.Accept(ctx), "failed to accept block at VM index %d", i)
 	}
 
-	wsBlk, wsResults, wsUnitPrices, err := client.ListenBlock(ctx, network.VMs[0].VM)
+	wsBlk, wsResults, wsUnitPrices, err := client.ListenBlock(ctx, network.VMs[0].VM.ChainDefinition)
 	r.NoError(err)
 
 	txID, txErr, res, unpackErr := client.ListenTx(ctx)

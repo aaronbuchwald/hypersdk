@@ -21,7 +21,7 @@ func newMetrics(r prometheus.Registerer) (*Metrics, error) {
 			Help:      "number of txs submitted to vm",
 		}),
 		mempoolSize: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "chain",
+			Namespace: "vm",
 			Name:      "mempool_size",
 			Help:      "number of transactions in the mempool",
 		}),

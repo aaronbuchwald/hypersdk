@@ -46,14 +46,14 @@ func GetStateSyncConfig(config hcontext.Config) (StateSyncConfig, error) {
 	return hcontext.GetConfig(config, StateSyncNamespace, NewDefaultStateSyncConfig())
 }
 
-func (vm *VM) initStateSync(ctx context.Context) error {
+func registerSyncers(vm *VM) ([]statesync.Syncer[*chain.ExecutionBlock], error) {
 	stateSyncConfig, err := GetStateSyncConfig(vm.snowInput.Config)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	stateSyncRegistry, err := metrics.MakeAndRegister(vm.snowCtx.Metrics, StateSyncNamespace)
+	stateSyncRegistry, err := metrics.MakeAndRegister(vm.snowCtx.Metrics, "syncers")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := statesync.RegisterHandlers(
 		vm.snowCtx.Log,
@@ -62,13 +62,13 @@ func (vm *VM) initStateSync(ctx context.Context) error {
 		changeProofHandlerID,
 		vm.stateDB,
 	); err != nil {
-		return err
+		return nil, err
 	}
 
-	vm.syncer = validitywindow.NewSyncer(vm, vm.chainTimeValidityWindow, func(time int64) int64 {
+	validityWindowSyncer := validitywindow.NewSyncer(vm, vm.chainTimeValidityWindow, func(time int64) int64 {
 		return vm.ruleFactory.GetRules(time).GetValidityWindow()
 	})
-	blockWindowSyncer := statesync.NewBlockWindowSyncer[*chain.ExecutionBlock](validityWindowAdapter{vm.syncer})
+	blockWindowSyncer := statesync.NewBlockWindowSyncer[*chain.ExecutionBlock](validityWindowAdapter{validityWindowSyncer})
 
 	merkleSyncer, err := statesync.NewMerkleSyncer[*chain.ExecutionBlock](
 		vm.snowCtx.Log,
@@ -80,6 +80,22 @@ func (vm *VM) initStateSync(ctx context.Context) error {
 		stateSyncConfig.MerkleSimultaneousWorkLimit,
 		stateSyncRegistry,
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	return []statesync.Syncer[*chain.ExecutionBlock]{
+		blockWindowSyncer,
+		merkleSyncer,
+	}, nil
+}
+
+func (vm *VM) initStateSync(ctx context.Context) error {
+	stateSyncConfig, err := GetStateSyncConfig(vm.snowInput.Config)
+	if err != nil {
+		return err
+	}
+	stateSyncRegistry, err := metrics.MakeAndRegister(vm.snowCtx.Metrics, "syncclient")
 	if err != nil {
 		return err
 	}
@@ -96,22 +112,23 @@ func (vm *VM) initStateSync(ctx context.Context) error {
 	})
 
 	inputCovariantVM := vm.snowApp.GetInputCovariantVM()
+	syncers, err := vm.options.syncers(vm)
+	if err != nil {
+		return err
+	}
 	client, err := statesync.NewAggregateClient[*chain.ExecutionBlock](
 		vm.snowCtx.Log,
 		inputCovariantVM,
 		syncerDB,
-		[]statesync.Syncer[*chain.ExecutionBlock]{
-			blockWindowSyncer,
-			merkleSyncer,
-		},
+		syncers,
 		vm.snowApp.StartStateSync,
 		func(ctx context.Context) error {
 			vm.snowCtx.Log.Info("State sync completed, extracting the final target state sync block")
-			stateHeight, err := vm.extractStateHeight()
+			stateHeight, err := extractStateHeight(ctx, vm.stateDB, vm.metadataManager)
 			if err != nil {
 				return fmt.Errorf("failed to extract state height after state sync: %w", err)
 			}
-			block, err := vm.chainStore.GetBlockByHeight(ctx, stateHeight+1)
+			block, err := vm.chainIndex.GetBlockByHeight(ctx, stateHeight+1)
 			if err != nil {
 				return fmt.Errorf("failed to get block by height %d after state sync: %w", stateHeight, err)
 			}

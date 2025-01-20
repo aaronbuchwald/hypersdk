@@ -43,6 +43,41 @@ type ChainInput struct {
 	Config                     hcontext.Config
 }
 
+type Builder[I Block, O Block] interface {
+	// BuildBlock returns a new input and output block built on top of the provided parent.
+	// The provided parent will be the current preference of the consensus engine.
+	BuildBlock(ctx context.Context, parent O) (I, O, error)
+}
+
+type Parser[I Block] interface {
+	// ParseBlock parses the provided bytes into an input block.
+	ParseBlock(ctx context.Context, bytes []byte) (I, error)
+}
+
+type Verifier[I Block, O Block] interface {
+	// VerifyBlock verifies the provided block is valid given its already verified parent
+	// and returns the resulting output of executing the block.
+	VerifyBlock(
+		ctx context.Context,
+		parent O,
+		block I,
+	) (O, error)
+}
+
+type Accepter[O Block, A Block] interface {
+	// AcceptBlock marks block as accepted and returns the resulting Accepted block type.
+	// AcceptBlock is guaranteed to be called after the input block has been persisted
+	// to disk.
+	AcceptBlock(ctx context.Context, acceptedParent A, block O) (A, error)
+}
+
+type ChainHandler[I Block, O Block, A Block] interface {
+	Builder[I, O]
+	Parser[I]
+	Verifier[I, O]
+	Accepter[O, A]
+}
+
 // Chain provides a reduced interface for chain / VM developers to implement.
 // The snow package implements the full AvalancheGo VM interface, so that the chain implementation
 // only needs to provide a way to initialize itself with all of the provided inputs, define concrete types
@@ -63,22 +98,8 @@ type Chain[I Block, O Block, A Block] interface {
 	// 1. A cached index of the chain
 	// 2. The ability to fetch the latest consensus state (preferred output block and last accepted block)
 	SetConsensusIndex(consensusIndex *ConsensusIndex[I, O, A])
-	// BuildBlock returns a new input and output block built on top of the provided parent.
-	// The provided parent will be the current preference of the consensus engine.
-	BuildBlock(ctx context.Context, parent O) (I, O, error)
-	// ParseBlock parses the provided bytes into an input block.
-	ParseBlock(ctx context.Context, bytes []byte) (I, error)
-	// VerifyBlock verifies the provided block is valid given its already verified parent
-	// and returns the resulting output of executing the block.
-	VerifyBlock(
-		ctx context.Context,
-		parent O,
-		block I,
-	) (O, error)
-	// AcceptBlock marks block as accepted and returns the resulting Accepted block type.
-	// AcceptBlock is guaranteed to be called after the input block has been persisted
-	// to disk.
-	AcceptBlock(ctx context.Context, acceptedParent A, block O) (A, error)
+
+	ChainHandler[I, O, A]
 }
 
 type namedCloser struct {
