@@ -68,6 +68,15 @@ func checkBlocks(
 		blkByID, err := indexer.GetBlock(expectedBlk.Block.GetID())
 		require.NoError(err)
 		require.Equal(expectedBlk.Block.GetID(), blkByID.Block.GetID())
+
+		for txIndex, expectedTx := range expectedBlk.Block.Txs {
+			found, actualTx, actualTimestamp, actualResult, err := indexer.GetTransaction(expectedTx.GetID())
+			require.NoError(err)
+			require.True(found)
+			require.Equal(expectedTx, actualTx)
+			require.Equal(expectedBlk.Block.Tmstmp, actualTimestamp)
+			require.Equal(expectedBlk.ExecutionResults.Results[txIndex], actualResult)
+		}
 	}
 
 	// Confirm blocks outside the window are not retrievable

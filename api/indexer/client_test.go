@@ -46,6 +46,7 @@ func TestIndexerClientBlocks(t *testing.T) {
 			require := require.New(t)
 			ctx := context.Background()
 			indexer, executedBlocks, _ := createTestIndexer(t, ctx, numExecutedBlocks, blockWindow, numTxs)
+			expectedBlock := executedBlocks[tt.blkHeight]
 
 			jsonHandler, err := api.NewJSONRPCHandler(Name, NewServer(trace.Noop, indexer))
 			require.NoError(err)
@@ -58,25 +59,26 @@ func TestIndexerClientBlocks(t *testing.T) {
 			parser := chaintest.NewTestParser()
 
 			client := NewClient(httpServer.URL)
-			executedBlock, err := client.GetBlockByHeight(ctx, executedBlocks[tt.blkHeight].Block.Hght, parser)
+			actualBlock, err := client.GetBlockByHeight(ctx, expectedBlock.Block.Hght, parser)
 			if tt.err == nil {
 				require.NoError(err)
-				require.Equal(executedBlocks[tt.blkHeight].Block, executedBlock.Block)
+				require.Equal(expectedBlock.Block, actualBlock.Block)
 			} else {
-				require.Contains(err.Error(), tt.err.Error())
+				require.ErrorContains(err, tt.err.Error()) //nolint:forbidigo
 			}
 
-			executedBlock, err = client.GetBlock(ctx, executedBlocks[tt.blkHeight].Block.GetID(), parser)
+			actualBlock, err = client.GetBlock(ctx, expectedBlock.Block.GetID(), parser)
 			if tt.err == nil {
 				require.NoError(err)
-				require.Equal(executedBlocks[tt.blkHeight].Block, executedBlock.Block)
+				require.Equal(expectedBlock.Block, actualBlock.Block)
 			} else {
-				require.Contains(err.Error(), tt.err.Error())
+				require.ErrorContains(err, tt.err.Error()) //nolint:forbidigo
 			}
 
-			executedBlock, err = client.GetLatestBlock(ctx, parser)
+			expectedLatestBlock := executedBlocks[numExecutedBlocks-1]
+			actualLatestBlock, err := client.GetLatestBlock(ctx, parser)
 			require.NoError(err)
-			require.Equal(executedBlocks[numExecutedBlocks-1].Block, executedBlock.Block)
+			require.Equal(expectedLatestBlock.Block, actualLatestBlock.Block)
 		})
 	}
 }
@@ -89,25 +91,25 @@ func TestIndexerClientTransactions(t *testing.T) {
 	)
 
 	testCases := []struct {
-		name     string
-		txBlkIdx int
-		txIdx    int
-		err      error
-		found    bool
+		name       string
+		txBlkIndex int
+		txIndex    int
+		err        error
+		found      bool
 	}{
 		{
-			name:     "success",
-			txBlkIdx: numExecutedBlocks - 1,
-			txIdx:    0,
-			found:    true,
-			err:      nil,
+			name:       "success",
+			txBlkIndex: numExecutedBlocks - 1,
+			txIndex:    0,
+			found:      true,
+			err:        nil,
 		},
 		{
-			name:     "missing transaction",
-			txBlkIdx: 0,
-			txIdx:    0,
-			found:    false,
-			err:      nil,
+			name:       "missing transaction",
+			txBlkIndex: 0,
+			txIndex:    0,
+			found:      false,
+			err:        nil,
 		},
 	}
 
@@ -129,27 +131,29 @@ func TestIndexerClientTransactions(t *testing.T) {
 
 			client := NewClient(httpServer.URL)
 
-			txResponse, found, err := client.GetTxResults(ctx, executedBlocks[tt.txBlkIdx].Block.Txs[tt.txIdx].GetID())
+			expectedExecutedBlock := executedBlocks[tt.txBlkIndex]
+			expectedTx := expectedExecutedBlock.Block.Txs[tt.txIndex]
+			txResponse, found, err := client.GetTxResults(ctx, expectedTx.GetID())
 			require.Equal(tt.err, err)
 			require.Equal(tt.found, found)
 			if tt.found {
 				require.Equal(GetTxResponse{
-					TxBytes:   executedBlocks[tt.txBlkIdx].Block.Txs[tt.txIdx].Bytes(),
-					Timestamp: executedBlocks[tt.txBlkIdx].Block.Tmstmp,
-					Result:    executedBlocks[tt.txBlkIdx].ExecutionResults.Results[tt.txIdx],
+					TxBytes:   expectedTx.Bytes(),
+					Timestamp: expectedExecutedBlock.Block.Tmstmp,
+					Result:    expectedExecutedBlock.ExecutionResults.Results[tt.txIndex],
 				}, txResponse)
 			}
 
-			txResponse, tx, found, err := client.GetTx(ctx, executedBlocks[tt.txBlkIdx].Block.Txs[tt.txIdx].GetID(), parser)
+			txResponse, actualTx, found, err := client.GetTx(ctx, expectedTx.GetID(), parser)
 			require.Equal(tt.err, err)
 			require.Equal(tt.found, found)
 			if tt.found {
 				require.Equal(GetTxResponse{
-					TxBytes:   executedBlocks[tt.txBlkIdx].Block.Txs[tt.txIdx].Bytes(),
-					Timestamp: executedBlocks[tt.txBlkIdx].Block.Tmstmp,
-					Result:    executedBlocks[tt.txBlkIdx].ExecutionResults.Results[tt.txIdx],
+					TxBytes:   expectedTx.Bytes(),
+					Timestamp: executedBlocks[tt.txBlkIndex].Block.Tmstmp,
+					Result:    executedBlocks[tt.txBlkIndex].ExecutionResults.Results[tt.txIndex],
 				}, txResponse)
-				require.Equal(executedBlocks[tt.txBlkIdx].Block.Txs[tt.txIdx], tx)
+				require.Equal(expectedTx, actualTx)
 			}
 		})
 	}
@@ -175,8 +179,9 @@ func TestIndexerClientWaitForTransaction(t *testing.T) {
 
 	client := NewClient(httpServer.URL)
 
-	timeoutCtx, ctxCancel := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer ctxCancel()
+	timeoutCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+
 	_, _, err = client.WaitForTransaction(timeoutCtx, 1*time.Millisecond, ids.GenerateTestID())
 	require.ErrorIs(err, context.DeadlineExceeded)
 }

@@ -35,6 +35,7 @@ func TestPreExecutor(t *testing.T) {
 
 	testMetadataManager := metadata.NewDefaultManager()
 	feeKey := string(chain.FeeKey(testMetadataManager.FeePrefix()))
+	testBalanceHandler := balance.NewPrefixBalanceHandler([]byte{0})
 
 	validTx := &chain.Transaction{
 		TransactionData: chain.TransactionData{
@@ -59,7 +60,7 @@ func TestPreExecutor(t *testing.T) {
 			name: "valid tx",
 			state: map[string][]byte{
 				feeKey: {},
-				string(balance.NewPrefixBalanceHandler([]byte{0}).BalanceKey(validTx.Auth.Sponsor())): binary.BigEndian.AppendUint64(nil, math.MaxUint64),
+				string(testBalanceHandler.BalanceKey(validTx.Auth.Sponsor())): binary.BigEndian.AppendUint64(nil, math.MaxUint64),
 			},
 			tx:             validTx,
 			validityWindow: &validitywindowtest.MockTimeValidityWindow[*chain.Transaction]{},
@@ -159,7 +160,7 @@ func TestPreExecutor(t *testing.T) {
 				&ruleFactory,
 				tt.validityWindow,
 				testMetadataManager,
-				balance.NewPrefixBalanceHandler([]byte{0}),
+				testBalanceHandler,
 			)
 
 			r.ErrorIs(

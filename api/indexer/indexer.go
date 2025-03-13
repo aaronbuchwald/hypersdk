@@ -28,39 +28,34 @@ const (
 	latestBlockHeightByte
 )
 
-var (
-	blockEntryKeyPrefix  = []byte{blockEntryByte}
-	latestBlockHeightKey = []byte{latestBlockHeightByte}
-)
+var blockEntryKeyPrefix = []byte{blockEntryByte}
 
 var (
-	errBlockNotFound          = errors.New("block not found")
-	errTxResultNotFound       = errors.New("transaction result not found")
-	errZeroBlockWindow        = errors.New("indexer configuration of non zero block window is expected")
-	errInvalidBlockWindowSize = errors.New("invalid indexer block window size specified")
+	errBlockNotFound           = errors.New("block not found")
+	errInvalidTxIndex          = errors.New("invalid transaction index found in cached block")
+	errTxIndexReferenceMissing = errors.New("tx index references a block not found in the cache")
+	errZeroBlockWindow         = errors.New("indexer configuration of non zero block window is expected")
+	errInvalidBlockWindowSize  = errors.New("invalid indexer block window size specified")
 )
 
 var _ event.Subscription[*chain.ExecutedBlock] = (*Indexer)(nil)
 
 type Indexer struct {
-	blockDB            *pebble.Database // height -> block bytes
-	cachedBlocks       []uint64
+	blockDB     *pebble.Database // height -> block bytes
+	parser      chain.Parser
+	blockWindow uint64 // Maximum window of blocks to retain
+
+	// mu must be held to access below fields
+	mu                 sync.RWMutex
 	blockIDToHeight    map[ids.ID]uint64
 	blockHeightToBlock map[uint64]*chain.ExecutedBlock
 	txCache            map[ids.ID]cachedTransaction
-	blockWindow        uint64 // Maximum window of blocks to retain
 	lastHeight         uint64
-	parser             chain.Parser
-
-	// synchronization mutex between r/w
-	mu sync.RWMutex
 }
 
 type cachedTransaction struct {
-	// blk is the block that contains the transaction
-	blk *chain.ExecutedBlock
-	// index is the position where the transaction appear within the block.
-	index int
+	blkHeight uint64
+	txIndex   int
 }
 
 func NewIndexer(path string, parser chain.Parser, blockWindow uint64) (*Indexer, error) {
@@ -83,35 +78,12 @@ func NewIndexer(path string, parser chain.Parser, blockWindow uint64) (*Indexer,
 		blockWindow:        blockWindow,
 		parser:             parser,
 		lastHeight:         math.MaxUint64,
-		cachedBlocks:       make([]uint64, 0, int(blockWindow)),
 	}
 
 	return i, i.initBlocks()
 }
 
 func (i *Indexer) initBlocks() error {
-	// Return immediately if the db is empty
-	hasLastHeight, err := i.blockDB.Has(latestBlockHeightKey)
-	if err != nil || !hasLastHeight {
-		return err
-	}
-
-	lastHeight, err := i.blockDB.Get(latestBlockHeightKey)
-	if err != nil {
-		return err
-	}
-
-	i.lastHeight = binary.BigEndian.Uint64(lastHeight)
-
-	if i.lastHeight > i.blockWindow {
-		lastRetainedHeight := i.lastHeight - i.blockWindow
-		lastRetainedHeightKey := blockEntryKey(lastRetainedHeight)
-		firstBlkKey := blockEntryKey(0)
-		if err := i.blockDB.DeleteRange(firstBlkKey, lastRetainedHeightKey); err != nil {
-			return err
-		}
-	}
-
 	// Load blockID <-> height mapping
 	iter := i.blockDB.NewIteratorWithPrefix(blockEntryKeyPrefix)
 	defer iter.Release()
@@ -123,61 +95,64 @@ func (i *Indexer) initBlocks() error {
 			return err
 		}
 		i.insertBlockIntoCache(blk)
+		i.lastHeight = blk.Block.Hght
 	}
 	if err := iter.Error(); err != nil {
 		return err
 	}
 	iter.Release()
+
+	if i.lastHeight > i.blockWindow {
+		lastRetainedHeight := i.lastHeight - i.blockWindow
+		lastRetainedHeightKey := blockEntryKey(lastRetainedHeight)
+		firstBlkKey := blockEntryKey(0)
+		if err := i.blockDB.DeleteRange(firstBlkKey, lastRetainedHeightKey); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 func (i *Indexer) Notify(_ context.Context, blk *chain.ExecutedBlock) error {
 	i.mu.Lock()
-	evictedBlockHeights := i.insertBlockIntoCache(blk)
+	evicts := i.insertBlockIntoCache(blk)
 	i.mu.Unlock()
 
-	return i.storeBlock(blk, evictedBlockHeights)
+	return i.storeBlock(blk, evicts)
 }
 
 // insertBlockIntoCache add the given block and its transactions to the
-// cache. It returns a slice of the evicted block heights.
-// assumes the write lock is held
-func (i *Indexer) insertBlockIntoCache(blk *chain.ExecutedBlock) []uint64 {
-	var evictedBlockHeights []uint64
-	if len(i.cachedBlocks) == int(i.blockWindow) {
-		evictedBlockHeights = []uint64{i.cachedBlocks[0]}
-		i.cachedBlocks = i.cachedBlocks[1:]
+// cache. It returns whether insertion triggered triggers an eviction.
+func (i *Indexer) insertBlockIntoCache(blk *chain.ExecutedBlock) (evicts bool) {
+	evictBlockHeight := blk.Block.Hght - i.blockWindow
+	if evictedBlock, ok := i.blockHeightToBlock[evictBlockHeight]; ok {
+		evicts = true
+		delete(i.blockIDToHeight, evictedBlock.Block.GetID())
+		delete(i.blockHeightToBlock, evictBlockHeight)
 
-		// find the block in the blocks cache.
-		evictedBlk := i.blockHeightToBlock[evictedBlockHeights[0]]
-
-		// remove the block from the caches
-		delete(i.blockIDToHeight, evictedBlk.Block.GetID())
-		delete(i.blockHeightToBlock, evictedBlockHeights[0])
-
-		// remove the transactions from the cache.
-		for _, tx := range evictedBlk.Block.Txs {
+		for _, tx := range evictedBlock.Block.Txs {
 			delete(i.txCache, tx.GetID())
 		}
 	}
-	i.cachedBlocks = append(i.cachedBlocks, blk.Block.Hght)
+
 	i.blockIDToHeight[blk.Block.GetID()] = blk.Block.Hght
 	i.blockHeightToBlock[blk.Block.Hght] = blk
 
-	for idx, tx := range blk.Block.Txs {
+	for txIndex, tx := range blk.Block.Txs {
 		i.txCache[tx.GetID()] = cachedTransaction{
-			blk:   blk,
-			index: idx,
+			blkHeight: blk.Block.Hght,
+			txIndex:   txIndex,
 		}
 	}
 	i.lastHeight = blk.Block.Hght
 
-	return evictedBlockHeights
+	return evicts
 }
 
 // storeBlock persist the given block to the database, and remove the
 // evicted blocks.
-func (i *Indexer) storeBlock(blk *chain.ExecutedBlock, evictedBlockHeights []uint64) error {
+func (i *Indexer) storeBlock(blk *chain.ExecutedBlock, evicts bool) error {
 	executedBlkBytes, err := blk.Marshal()
 	if err != nil {
 		return err
@@ -189,14 +164,13 @@ func (i *Indexer) storeBlock(blk *chain.ExecutedBlock, evictedBlockHeights []uin
 		return err
 	}
 
-	for _, evictedBlockHeight := range evictedBlockHeights {
+	// If insertions evicts a block, calculate the height to remove and delete it
+	// within the same batch.
+	if evicts {
+		evictedBlockHeight := blk.Block.Hght - i.blockWindow
 		if err := blkBatch.Delete(blockEntryKey(evictedBlockHeight)); err != nil {
 			return err
 		}
-	}
-
-	if err := blkBatch.Put(latestBlockHeightKey, binary.BigEndian.AppendUint64(nil, i.lastHeight)); err != nil {
-		return err
 	}
 
 	return blkBatch.Write()
@@ -246,12 +220,34 @@ func (i *Indexer) GetTransaction(txID ids.ID) (bool, *chain.Transaction, int64, 
 	if !ok {
 		return false, nil, 0, nil, nil
 	}
-	tx := cachedTx.blk.Block.Txs[cachedTx.index]
-	if len(cachedTx.blk.ExecutionResults.Results) <= cachedTx.index {
-		return false, nil, 0, nil, fmt.Errorf("%w: block height %d, transaction index %d", errTxResultNotFound, cachedTx.blk.Block.Hght, cachedTx.index)
+	cachedBlock, ok := i.blockHeightToBlock[cachedTx.blkHeight]
+	if !ok {
+		return false, nil, 0, nil, errTxIndexReferenceMissing
 	}
-	result := cachedTx.blk.ExecutionResults.Results[cachedTx.index]
-	return true, tx, cachedTx.blk.Block.Tmstmp, result, nil
+
+	// These errors should be unreachable, but are included for defense in depth
+	if cachedTx.txIndex >= len(cachedBlock.Block.Txs) {
+		return false, nil, 0, nil, fmt.Errorf(
+			"%w: block height %d contains %d txs, found tx index %d",
+			errInvalidTxIndex,
+			cachedBlock.Block.Hght,
+			len(cachedBlock.Block.Txs),
+			cachedTx.txIndex,
+		)
+	}
+	if cachedTx.txIndex >= len(cachedBlock.ExecutionResults.Results) {
+		return false, nil, 0, nil, fmt.Errorf(
+			"%w: block height %d contains %d tx results, found tx index %d",
+			errInvalidTxIndex,
+			cachedBlock.Block.Hght,
+			len(cachedBlock.ExecutionResults.Results),
+			cachedTx.txIndex,
+		)
+	}
+
+	tx := cachedBlock.Block.Txs[cachedTx.txIndex]
+	result := cachedBlock.ExecutionResults.Results[cachedTx.txIndex]
+	return true, tx, cachedBlock.Block.Tmstmp, result, nil
 }
 
 func (i *Indexer) Close() error {
