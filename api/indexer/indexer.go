@@ -116,18 +116,17 @@ func (i *Indexer) initBlocks() error {
 
 func (i *Indexer) Notify(_ context.Context, blk *chain.ExecutedBlock) error {
 	i.mu.Lock()
-	evicts := i.insertBlockIntoCache(blk)
+	i.insertBlockIntoCache(blk)
 	i.mu.Unlock()
 
-	return i.storeBlock(blk, evicts)
+	return i.storeBlock(blk)
 }
 
 // insertBlockIntoCache add the given block and its transactions to the
 // cache. It returns whether insertion triggered triggers an eviction.
-func (i *Indexer) insertBlockIntoCache(blk *chain.ExecutedBlock) (evicts bool) {
+func (i *Indexer) insertBlockIntoCache(blk *chain.ExecutedBlock) {
 	evictBlockHeight := blk.Block.Hght - i.blockWindow
 	if evictedBlock, ok := i.blockHeightToBlock[evictBlockHeight]; ok {
-		evicts = true
 		delete(i.blockIDToHeight, evictedBlock.Block.GetID())
 		delete(i.blockHeightToBlock, evictBlockHeight)
 
@@ -146,13 +145,11 @@ func (i *Indexer) insertBlockIntoCache(blk *chain.ExecutedBlock) (evicts bool) {
 		}
 	}
 	i.lastHeight = blk.Block.Hght
-
-	return evicts
 }
 
 // storeBlock persist the given block to the database, and remove the
 // evicted blocks.
-func (i *Indexer) storeBlock(blk *chain.ExecutedBlock, evicts bool) error {
+func (i *Indexer) storeBlock(blk *chain.ExecutedBlock) error {
 	executedBlkBytes, err := blk.Marshal()
 	if err != nil {
 		return err
@@ -164,9 +161,11 @@ func (i *Indexer) storeBlock(blk *chain.ExecutedBlock, evicts bool) error {
 		return err
 	}
 
-	// If insertions evicts a block, calculate the height to remove and delete it
-	// within the same batch.
-	if evicts {
+	// If inserting the block exceeds the block window, evict the oldest block
+	// Note: this will perform a delete of a non-existing enry if we have less than
+	// blockWindow blocks stored. This can occur if the blockWindow changes after restart
+	// or after state sync.
+	if blk.Block.Hght > i.blockWindow {
 		evictedBlockHeight := blk.Block.Hght - i.blockWindow
 		if err := blkBatch.Delete(blockEntryKey(evictedBlockHeight)); err != nil {
 			return err
